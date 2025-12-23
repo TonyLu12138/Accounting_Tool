@@ -8,7 +8,12 @@ import re
 import yaml
 from pathlib import Path
 from decimal import Decimal, ROUND_HALF_UP
-from datetime import datetime
+from datetime import date, datetime
+
+CHINESE_MONTH = {
+    "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
+    "七": 7, "八": 8, "九": 9, "十": 10, "十一": 11, "十二": 12
+}
 
 SYSTEM_KEYS = {
     "balance-all",
@@ -17,6 +22,73 @@ SYSTEM_KEYS = {
     "Default_income",
     "Default_salary",
 }
+
+# ------------------ 日期解析函数 ------------------
+def parse_date_input(text: str | None) -> str:
+    """
+    返回 YYYY-MM-DD
+    支持：
+    - 20251223
+    - 2025/12/23
+    - 2025-12-23
+    - 1223
+    - 12-23
+    - 十二月二十三日
+    - 空输入 → 今天
+    """
+    today = date.today()
+
+    if not text or not text.strip():
+        return today.strftime("%Y-%m-%d")
+
+    text = text.strip()
+
+    # 1️⃣ YYYYMMDD
+    if re.fullmatch(r"\d{8}", text):
+        return datetime.strptime(text, "%Y%m%d").strftime("%Y-%m-%d")
+
+    # 2️⃣ YYYY/MM/DD or YYYY-MM-DD
+    for fmt in ("%Y/%m/%d", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+
+    # 3️⃣ MMDD or MM-DD
+    m = re.fullmatch(r"(\d{1,2})[/-]?(\d{1,2})", text)
+    if m:
+        month, day = map(int, m.groups())
+        return date(today.year, month, day).strftime("%Y-%m-%d")
+
+    # 4️⃣ 中文日期：十二月二十三日
+    m = re.search(r"(.+?)月(.+?)日", text)
+    if m:
+        month_cn, day_cn = m.groups()
+        month = CHINESE_MONTH.get(month_cn)
+        day = chinese_number_to_int(day_cn)
+        if month and day:
+            return date(today.year, month, day).strftime("%Y-%m-%d")
+
+    raise ValueError("无法识别的日期格式")
+
+def chinese_number_to_int(text):
+    mapping = {"一":1,"二":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9,"十":10}
+    if text == "十":
+        return 10
+    if text.startswith("十"):
+        return 10 + mapping.get(text[1], 0)
+    if "十" in text:
+        a, b = text.split("十")
+        return mapping[a] * 10 + mapping.get(b, 0)
+    return mapping.get(text)
+
+def ask_date():
+    raw = input("请输入发生日期（回车=今天）: ").strip()
+    try:
+        return parse_date_input(raw)
+    except ValueError:
+        print("❌ 日期格式无法识别，请重新输入")
+        return ask_date()
 
 # ------------------ 读取数据 ------------------
 def read_data(yaml_path, logger=None):
@@ -205,13 +277,17 @@ def expense_mode(data, yaml_path, logger=None):
     total_expense = sum(Decimal(x) for x in amounts).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     data[account] -= Decimal(total_expense)
     data["balance-all"] -= Decimal(total_expense)
+    
+    record_date = ask_date()
+    
     data["history"].append({
+        "date": record_date,
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "type": "消费",
         "record": user_input,
         "expense": format(total_expense, "f"),
-        "balance-all": data["balance-all"],
-        account: data[account]
+        "account": account,
+        "balance-all": data["balance-all"]
     })
     write_data(data, yaml_path, logger)
     print(f"消费成功！{account} 余额: {data[account]} , 总余额: {data['balance-all']}")
@@ -230,12 +306,16 @@ def income_mode(data, yaml_path, logger=None):
         return
     data[account] += Decimal(salary)
     data["balance-all"] += Decimal(salary)
+    
+    record_date = ask_date()
+
     data["history"].append({
+        "date": record_date,
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "type": "工资",
         "salary": format(salary, "f"),
-        "balance-all": data["balance-all"],
-        account: data[account]
+        "account": account,
+        "balance-all": data["balance-all"]
     })
     write_data(data, yaml_path, logger)
     print(f"工资增加成功！{account} 余额: {data[account]} , 总余额: {data['balance-all']}")
@@ -255,13 +335,17 @@ def income_extra_mode(data, yaml_path, logger=None):
     total_income = sum(Decimal(x) for x in amounts).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     data[account] += Decimal(total_income)
     data["balance-all"] += Decimal(total_income)
+    
+    record_date = ask_date()
+
     data["history"].append({
+        "date": record_date,
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "type": "收入",
         "record": user_input,
         "income": format(total_income, "f"),
-        "balance-all": data["balance-all"],
-        account: data[account]
+        "account": account,
+        "balance-all": data["balance-all"]
     })
     write_data(data, yaml_path, logger)
     print(f"收入成功！{account} 余额: {data[account]} , 总余额: {data['balance-all']}")
